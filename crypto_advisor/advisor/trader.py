@@ -1,10 +1,12 @@
 """Automatic trading logic (buy, stop-loss, take-profit, time exit, kill switch).
 
 Rules
-- One position per coin. Entry = LIMIT BUY slightly above the ask (fills quickly).
-- After the buy fills, a resting LIMIT SELL is placed at entry * (1 + min_profit%).
+- One position per market. Entry = LIMIT BUY slightly above the ask (fills quickly).
+- After the buy fills, a resting LIMIT SELL is placed at entry * (1 + min_profit%) on Wallex.
 - Stop-loss is checked by the app every few seconds on the live bid: entry * (1 - max_loss%).
   The app must be running for the stop-loss to act. Exit = LIMIT SELL slightly below bid.
+- Money is kept per quote currency: USDT markets use capital, TMN markets use capital_tmn.
+  Profit, loss, exposure and limits are never mixed between USDT and TMN.
 - Halts: daily loss limit (resumes next day), total drawdown limit (manual resume), kill switch.
 - Only orders placed by this app (client id prefix ADV) are ever cancelled.
 """
@@ -21,7 +23,7 @@ from typing import Callable
 from .config import Config
 from .execution import ExecutionError
 from .strategy import Advice
-from .wallex import MarketMeta, OrderInfo, round_down, round_up
+from .wallex import QUOTE_ASSETS, MarketMeta, OrderInfo, quote_of, round_down, round_up
 
 PREFIX = "ADV"
 
@@ -59,6 +61,19 @@ def _cid(kind: str) -> str:
     return f"{PREFIX}{kind}{secrets.token_hex(6)}"       # letters/digits only
 
 
+def _zero() -> dict[str, float]:
+    return {q: 0.0 for q in QUOTE_ASSETS}
+
+
+def _per_quote(v) -> dict[str, float]:
+    """Accepts the new dict form or an old single number (treated as USDT)."""
+    if isinstance(v, dict):
+        return {q: float(v.get(q, 0.0)) for q in QUOTE_ASSETS}
+    out = _zero()
+    out["USDT"] = float(v or 0.0)
+    return out
+
+
 class Trader:
     def __init__(self, cfg: Config, executor, state_path: Path, log: Callable[[str], None] = print):
         self.cfg = cfg
@@ -68,8 +83,8 @@ class Trader:
         self.positions: dict[str, Position] = {}
         self.trades: list[dict] = []
         self.day = _now().date().isoformat()
-        self.realised_today = 0.0
-        self.realised_total = 0.0
+        self.realised_today = _zero()
+        self.realised_total = _zero()
         self.halted = False
         self.halt_reason = ""
         self.halt_kind = ""           # "daily" (auto-resume next day) | "manual" | "drawdown"
@@ -92,8 +107,8 @@ class Trader:
         self.positions = {s: Position(**p) for s, p in d.get("positions", {}).items()}
         self.trades = d.get("trades", [])
         self.day = d.get("day", self.day)
-        self.realised_today = d.get("realised_today", 0.0)
-        self.realised_total = d.get("realised_total", 0.0)
+        self.realised_today = _per_quote(d.get("realised_today", 0.0))
+        self.realised_total = _per_quote(d.get("realised_total", 0.0))
         self.halted = d.get("halted", False)
         self.halt_reason = d.get("halt_reason", "")
         self.halt_kind = d.get("halt_kind", "")
@@ -103,18 +118,25 @@ class Trader:
         today = _now().date().isoformat()
         if today != self.day:
             self.day = today
-            self.realised_today = 0.0
+            self.realised_today = _zero()
             if self.halted and self.halt_kind == "daily":
                 self.halted, self.halt_reason, self.halt_kind = False, "", ""
                 self.log("New day: daily-loss halt lifted.")
             self._save()
 
     def _check_limits(self) -> None:
-        cap = self.cfg.capital
-        if not self.halted and self.realised_total <= -self.cfg.max_drawdown_kill * cap:
-            self._halt(f"total loss reached {self.cfg.max_drawdown_kill:.0%} of capital", "drawdown")
-        elif not self.halted and self.realised_today <= -self.cfg.max_daily_loss_frac * cap:
-            self._halt(f"daily loss reached {self.cfg.max_daily_loss_frac:.0%} of capital", "daily")
+        if self.halted:
+            return
+        for q in QUOTE_ASSETS:
+            cap = self.cfg.capital_for(q)
+            if cap > 0 and self.realised_total[q] <= -self.cfg.max_drawdown_kill * cap:
+                self._halt(f"total {q} loss reached {self.cfg.max_drawdown_kill:.0%} of {q} capital", "drawdown")
+                return
+        for q in QUOTE_ASSETS:
+            cap = self.cfg.capital_for(q)
+            if cap > 0 and self.realised_today[q] <= -self.cfg.max_daily_loss_frac * cap:
+                self._halt(f"daily {q} loss reached {self.cfg.max_daily_loss_frac:.0%} of {q} capital", "daily")
+                return
 
     def _halt(self, reason: str, kind: str) -> None:
         self.halted, self.halt_reason, self.halt_kind = True, reason, kind
@@ -127,11 +149,17 @@ class Trader:
         self.log("Trading resumed by user.")
         self._save()
 
-    def exposure(self, bids: dict[str, float]) -> float:
+    def exposure(self, bids: dict[str, float], quote: str | None = None) -> float:
+        """Value in use. With quote given, only markets quoted in that currency are counted."""
         total = 0.0
         for s, p in self.positions.items():
-            px = bids.get(s) or p.entry_price or p.price
-            total += max(0.0, p.qty - p.sold_qty) * px if p.phase != "entering" else p.qty_req * p.price
+            if quote is not None and quote_of(s) != quote:
+                continue
+            if p.phase == "entering":
+                total += p.qty_req * p.price
+            else:
+                px = bids.get(s) or p.entry_price or p.price
+                total += max(0.0, p.qty - p.sold_qty) * px
         return total
 
     # ------------------------------------------------------------ entries
@@ -152,31 +180,35 @@ class Trader:
 
     def _open(self, adv: Advice, bid: float, ask: float, bids: dict[str, float]) -> list[str]:
         sym = adv.symbol
+        q = quote_of(sym)
         if ask <= 0:
             return [f"{sym}: no ask price, skipped"]
+        if self.cfg.capital_for(q) <= 0:
+            return [f"{sym}: BUY skipped, no {q} capital set (enter it in the window)"]
         try:
             meta = self.ex.meta(sym)
         except ExecutionError as exc:
             return [f"{sym}: {exc}"]
-        budget = min(adv.amount_quote, self.cfg.capital * self.cfg.max_total_exposure - self.exposure(bids))
-        budget = min(budget, self.ex.free_quote() * 0.995)
-        if budget < self.cfg.min_order_quote:
-            return [f"{sym}: BUY skipped, budget {budget:.2f} below minimum {self.cfg.min_order_quote}"]
+        scfg = self.cfg.scoped(q)
+        budget = min(adv.amount_quote, scfg.capital * self.cfg.max_total_exposure - self.exposure(bids, q))
+        budget = min(budget, self.ex.free_quote(sym) * 0.995)
+        if budget < scfg.min_order_quote:
+            return [f"{sym}: BUY skipped, budget {budget:.2f} {q} below minimum {scfg.min_order_quote:g} {q}"]
         price = round_up(ask * (1 + self.cfg.entry_buffer), meta.price_dp)
         qty = round_down(budget / price, meta.qty_dp)
-        if qty < meta.min_qty or qty * price < max(meta.min_notional, self.cfg.min_order_quote):
+        if qty < meta.min_qty or qty * price < max(meta.min_notional, scfg.min_order_quote):
             return [f"{sym}: BUY skipped, order too small for Wallex minimums"]
         cid = _cid("B")
         try:
             self.ex.place_limit("BUY", sym, price, qty, cid)
-        except Exception as exc:  # network/API errors are reported, not raised
+        except Exception as exc:                  # network/API errors are reported, not raised
             return [f"{sym}: BUY order failed: {exc}"]
         pos = Position(symbol=sym, phase="entering", cid=cid, entry_cid=cid, price=price, qty_req=qty,
                        t_open=_now().isoformat(timespec="seconds"), order_ts=time.time())
         self.positions[sym] = pos
         self._save()
         mode = "SIMULATED" if not self.ex.is_live else "LIVE"
-        return [f"{sym}: {mode} BUY limit {qty} @ {price} (about {qty * price:.2f} {meta.quote})"]
+        return [f"{sym}: {mode} BUY limit {qty} @ {price} (about {qty * price:,.2f} {q})"]
 
     # ------------------------------------------------------------ monitoring (every tick)
     def on_tick(self, sym: str, bid: float, ask: float) -> list[str]:
@@ -190,7 +222,7 @@ class Trader:
                 return self._check_holding(pos, bid)
             if pos.phase == "exiting":
                 return self._check_exit(pos, bid)
-        except (ExecutionError, Exception) as exc:
+        except Exception as exc:
             return [f"{sym}: order check failed, will retry: {exc}"]
         return []
 
@@ -200,7 +232,7 @@ class Trader:
     def _cancel_safely(self, cid: str) -> OrderInfo:
         try:
             self.ex.cancel(cid)
-        except (ExecutionError, Exception):
+        except Exception:
             pass
         return self.ex.get(cid)
 
@@ -238,7 +270,7 @@ class Trader:
         cid = _cid("T")
         try:
             o = self.ex.place_limit("SELL", pos.symbol, px, qty, cid)
-        except (ExecutionError, Exception) as exc:
+        except Exception as exc:
             return [f"{pos.symbol}: take-profit order not placed ({exc}); app will still sell at the target while running"]
         pos.take_cid = cid
         if o.filled:
@@ -262,7 +294,6 @@ class Trader:
         return []
 
     def _check_holding(self, pos: Position, bid: float) -> list[str]:
-        ev: list[str] = []
         if pos.take_cid:
             t = self.ex.get(pos.take_cid)
             if t.filled:
@@ -281,8 +312,8 @@ class Trader:
         elif (time.time() - datetime.fromisoformat(pos.t_open).timestamp()) > self.cfg.max_hold_hours * 3600:
             reason = f"max holding time {self.cfg.max_hold_hours:g} h reached"
         if reason:
-            ev += self._start_exit(pos, bid, reason)
-        return ev
+            return self._start_exit(pos, bid, reason)
+        return []
 
     # ------------------------------------------------------------ exits
     def _start_exit(self, pos: Position, bid: float, reason: str) -> list[str]:
@@ -308,7 +339,7 @@ class Trader:
         cid = _cid("S")
         try:
             o = self.ex.place_limit("SELL", pos.symbol, px, qty, cid)
-        except (ExecutionError, Exception) as exc:
+        except Exception as exc:
             return [f"{pos.symbol}: exit order failed, retrying: {exc}"]
         pos.cid, pos.price, pos.order_ts = cid, px, time.time()
         self._save()
@@ -337,15 +368,17 @@ class Trader:
         left = pos.qty - pos.sold_qty
         if not force and not self._is_dust(meta, round_down(left, meta.qty_dp), avg_px or pos.entry_price):
             return []
+        q = quote_of(pos.symbol)
         sold_px = pos.proceeds / pos.sold_qty if pos.sold_qty else avg_px
         frac = min(1.0, pos.sold_qty / pos.qty) if pos.qty else 1.0
         cost = pos.entry_price * pos.entry_exec * frac            # quote paid for the part we sold
         received = pos.proceeds * (1 - self.cfg.fee_rate)          # quote received after sell fee
         pnl = received - cost
         pnl_pct = (pnl / cost * 100) if cost else 0.0
-        self.realised_today += pnl
-        self.realised_total += pnl
-        self.trades.append({"symbol": pos.symbol, "opened": pos.t_open, "closed": _now().isoformat(timespec="seconds"),
+        self.realised_today[q] += pnl
+        self.realised_total[q] += pnl
+        self.trades.append({"symbol": pos.symbol, "quote": q, "opened": pos.t_open,
+                            "closed": _now().isoformat(timespec="seconds"),
                             "entry": round(pos.entry_price, 10), "exit": round(sold_px, 10),
                             "qty": round(pos.sold_qty, 10), "pnl_quote": round(pnl, 6),
                             "pnl_pct": round(pnl_pct, 4), "reason": reason,
@@ -353,7 +386,7 @@ class Trader:
         del self.positions[pos.symbol]
         self._save()
         self._check_limits()
-        return [f"{pos.symbol}: CLOSED ({reason}). P&L {pnl:+.2f} {meta.quote} ({pnl_pct:+.2f}%)"]
+        return [f"{pos.symbol}: CLOSED ({reason}). P&L {pnl:+,.2f} {q} ({pnl_pct:+.2f}%)"]
 
     # ------------------------------------------------------------ kill switch
     def kill_switch(self, sell_all: bool, bids: dict[str, float]) -> list[str]:
@@ -365,7 +398,7 @@ class Trader:
             try:
                 self.ex.cancel(cid)
                 ev.append(f"cancelled {cid} ({sym})")
-            except (ExecutionError, Exception) as exc:
+            except Exception as exc:
                 ev.append(f"could not cancel {cid}: {exc}")
         for pos in list(self.positions.values()):
             if pos.take_cid:
@@ -384,7 +417,7 @@ class Trader:
     def _roll_back_entry(self, pos: Position) -> None:
         try:
             o = self.ex.get(pos.cid)
-        except (ExecutionError, Exception):
+        except Exception:
             return
         if o.executed_qty > 0:
             # bought partly before cancel: keep it as a holding, monitored like any other
@@ -401,6 +434,7 @@ class Trader:
     # ------------------------------------------------------------ status for GUI / logs
     def summary(self, bids: dict[str, float]) -> dict:
         return {"halted": self.halted, "halt_reason": self.halt_reason,
-                "realised_today": round(self.realised_today, 4), "realised_total": round(self.realised_total, 4),
-                "exposure": round(self.exposure(bids), 4), "open_positions": len(self.positions),
-                "trades": len(self.trades)}
+                "realised_today": {q: round(v, 4) for q, v in self.realised_today.items()},
+                "realised_total": {q: round(v, 4) for q, v in self.realised_total.items()},
+                "exposure": {q: round(self.exposure(bids, q), 4) for q in QUOTE_ASSETS},
+                "open_positions": len(self.positions), "trades": len(self.trades)}

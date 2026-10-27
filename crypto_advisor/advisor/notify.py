@@ -11,6 +11,7 @@ import requests
 
 from .config import Config
 from .strategy import Advice
+from .wallex import base_quote
 
 KIND_TEXT = {
     "BUY_SIGNAL": "BUY SUGGESTION",
@@ -25,11 +26,12 @@ def format_alert(adv: Advice, kind: str) -> str:
     head = f"*** {KIND_TEXT.get(kind, kind)}: {adv.symbol} @ {adv.price:.6g} ***"
     lines = [head, f"   P(up) {adv.prob_up:.0%} | expected net gain {adv.net_edge:+.2%} | "
                    f"1h move {adv.ret_1h:+.2%} | volume z {adv.vol_z:+.1f}"]
+    base, quote = base_quote(adv.symbol)
     if kind in ("BUY_SIGNAL", "OPPORTUNITY") and adv.action == "BUY":
-        lines.append(f"   Suggested amount: {adv.amount_quote:.2f} USDT (~{adv.qty:.6g} {adv.symbol[:-4]})"
+        lines.append(f"   Suggested amount: {adv.amount_quote:,.2f} {quote} (~{adv.qty:.6g} {base})"
                      f" | stop {adv.stop_price:.6g} | target {adv.take_price:.6g}")
     if kind == "SELL_SIGNAL":
-        lines.append(f"   Suggest selling {adv.qty:.6g} units (~{adv.amount_quote:.2f} USDT). {adv.reason}")
+        lines.append(f"   Suggest selling {adv.qty:.6g} {base} (~{adv.amount_quote:,.2f} {quote}). {adv.reason}")
     lines.append(f"   {adv.reason}")
     return "\n".join(lines)
 

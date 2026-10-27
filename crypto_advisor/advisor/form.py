@@ -18,7 +18,7 @@ def _num(text: str, label: str, errors: list[str]) -> float | None:
 
 
 def parse_form(base: Config, values: dict[str, str], has_key: bool) -> tuple[Config | None, list[str]]:
-    """values keys: max_loss, min_profit, capital, exposure, symbols, mode.
+    """values keys: max_loss, min_profit, capital, capital_tmn, exposure, symbols, mode.
     Percent fields are typed as plain numbers (5 means 5%). Returns (config or None, error messages)."""
     errors: list[str] = []
     cfg = dataclasses.replace(base, symbols=list(base.symbols),
@@ -37,6 +37,11 @@ def parse_form(base: Config, values: dict[str, str], has_key: bool) -> tuple[Con
         if capital <= 0:
             errors.append("Capital must be greater than 0")
         cfg.capital = capital
+    capital_tmn = _num(values.get("capital_tmn", "") or "0", "Capital (TMN)", errors)
+    if capital_tmn is not None:
+        if capital_tmn < 0:
+            errors.append("Capital (TMN) cannot be negative (use 0 to disable TMN markets)")
+        cfg.capital_tmn = capital_tmn
     exposure = _num(values.get("exposure", ""), "Max invested %", errors)
     if exposure is not None:
         if not 0 < exposure <= 100:
@@ -58,7 +63,7 @@ def parse_form(base: Config, values: dict[str, str], has_key: bool) -> tuple[Con
     if errors:
         return None, errors
     try:
-        cfg.validate()
+        cfg.validate()                     # also refuses TMN markets when Capital (TMN) is 0
     except ValueError as exc:
         return None, [str(exc)]
     return cfg, []

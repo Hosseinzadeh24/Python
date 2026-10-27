@@ -14,6 +14,7 @@ import requests
 
 BASE_URL = "https://api.wallex.ir"
 FILLED_STATES = {"FILLED", "EXECUTED", "DONE"}
+QUOTE_ASSETS = ("USDT", "TMN")          # TMN = toman; markets look like BTCUSDT or BTCTMN
 TERMINAL_STATES = FILLED_STATES | {"CANCELED", "CANCELLED", "REJECTED", "EXPIRED"}
 
 
@@ -22,6 +23,18 @@ class WallexError(RuntimeError):
 
 
 # ---------------------------------------------------------------- helpers
+def base_quote(symbol: str) -> tuple[str, str]:
+    """'BTCUSDT' -> ('BTC', 'USDT'); 'BTCTMN' -> ('BTC', 'TMN'). Raises for other symbols."""
+    for q in QUOTE_ASSETS:
+        if symbol.endswith(q) and len(symbol) > len(q):
+            return symbol[: -len(q)], q
+    raise ValueError(f"unsupported market {symbol} (only USDT and TMN markets)")
+
+
+def quote_of(symbol: str) -> str:
+    return base_quote(symbol)[1]
+
+
 def to_float(x, default: float = 0.0) -> float:
     try:
         return float(x)
@@ -50,7 +63,7 @@ def _dp(v, default: int) -> int:
     if f < 0:
         return default
     if f == int(f):
-        return int(f)
+        return min(int(f), 8)                  # the docs say this is a count of decimals
     return max(0, round(-math.log10(f)))
 
 

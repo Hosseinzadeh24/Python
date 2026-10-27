@@ -3,14 +3,17 @@
 WallexExecutor : real limit orders on Wallex (needs your API key).
 SimExecutor    : simulated limit orders filled against REAL prices (no money, for testing).
 The trader uses only these methods, so the same logic runs in both modes.
+Balances are per asset (USDT, TMN, BTC, ...). Each market uses its own quote asset.
 """
 from __future__ import annotations
 
+import json
 import time
 from dataclasses import asdict, replace
+from pathlib import Path
 from typing import Callable
 
-from .wallex import MarketMeta, OrderInfo, WallexClient, fmt_fixed, parse_order
+from .wallex import MarketMeta, OrderInfo, WallexClient, base_quote, fmt_fixed, parse_order, quote_of
 
 PricesFn = Callable[[str], tuple[float, float]]        # symbol -> (bid, ask)
 
@@ -22,19 +25,17 @@ class ExecutionError(RuntimeError):
 class SimExecutor:
     is_live = False
 
-    def __init__(self, metas: dict[str, MarketMeta], prices: PricesFn, quote: str = "USDT",
-                 start_quote: float = 1000.0, fee_rate: float = 0.002):
+    def __init__(self, metas: dict[str, MarketMeta], prices: PricesFn,
+                 start_balances: dict[str, float] | None = None, fee_rate: float = 0.002):
         self.metas = metas
         self.prices = prices
-        self.quote = quote
         self.fee = fee_rate
-        self.balance: dict[str, float] = {quote: start_quote}
+        self.balance: dict[str, float] = {k: float(v) for k, v in (start_balances or {}).items()}
         self.orders: dict[str, OrderInfo] = {}
-        self.reserved: dict[str, float] = {}           # cid -> reserved amount (quote for BUY, base for SELL)
+        self.reserved: dict[str, float] = {}           # cid -> quote (BUY) or base (SELL) amount held back
 
+    # ---- persistence (dry-run balances survive a restart together with the trader state)
     def save(self, path) -> None:
-        import json
-        from pathlib import Path
         data = {"balance": self.balance, "reserved": self.reserved,
                 "orders": {k: asdict(v) for k, v in self.orders.items()}}
         tmp = Path(path).with_suffix(".tmp")
@@ -42,8 +43,6 @@ class SimExecutor:
         tmp.replace(Path(path))
 
     def load(self, path) -> None:
-        import json
-        from pathlib import Path
         p = Path(path)
         if not p.exists():
             return
@@ -52,23 +51,25 @@ class SimExecutor:
         self.reserved = {k: float(v) for k, v in data.get("reserved", {}).items()}
         self.orders = {k: OrderInfo(**v) for k, v in data.get("orders", {}).items()}
 
+    # ---- queries
     def meta(self, symbol: str) -> MarketMeta:
         if symbol not in self.metas:
             raise ExecutionError(f"unknown market {symbol}")
         return self.metas[symbol]
 
-    def _base(self, symbol: str) -> str:
-        return self.meta(symbol).base
-
-    def free_quote(self) -> float:
-        return self.balance.get(self.quote, 0.0) - sum(v for k, v in self.reserved.items()
-                                                      if self.orders[k].side == "BUY")
+    def free_quote(self, symbol: str) -> float:
+        q = quote_of(symbol)
+        held = sum(v for k, v in self.reserved.items()
+                   if self.orders[k].side == "BUY" and quote_of(self.orders[k].symbol) == q)
+        return self.balance.get(q, 0.0) - held
 
     def free_base(self, symbol: str) -> float:
-        base = self._base(symbol)
-        return self.balance.get(base, 0.0) - sum(v for k, v in self.reserved.items()
-                                                 if self.orders[k].side == "SELL" and self.orders[k].symbol == symbol)
+        base = base_quote(symbol)[0]
+        held = sum(v for k, v in self.reserved.items()
+                   if self.orders[k].side == "SELL" and base_quote(self.orders[k].symbol)[0] == base)
+        return self.balance.get(base, 0.0) - held
 
+    # ---- orders
     def place_limit(self, side: str, symbol: str, price: float, qty: float, client_id: str) -> OrderInfo:
         side = side.upper()
         if client_id in self.orders:
@@ -77,14 +78,14 @@ class SimExecutor:
         self.orders[client_id] = info
         if side == "BUY":
             need = qty * price
-            if need > self.free_quote() + 1e-9:
+            if need > self.free_quote(symbol) + 1e-9:
                 self.orders.pop(client_id)
-                raise ExecutionError(f"not enough {self.quote}: need {need:.2f}")
+                raise ExecutionError(f"not enough {quote_of(symbol)}: need {need:.2f}")
             self.reserved[client_id] = need
         else:
             if qty > self.free_base(symbol) + 1e-12:
                 self.orders.pop(client_id)
-                raise ExecutionError(f"not enough {self._base(symbol)} to sell {qty}")
+                raise ExecutionError(f"not enough {base_quote(symbol)[0]} to sell {qty}")
             self.reserved[client_id] = qty
         self._try_fill(client_id, *self.prices(symbol))
         return self.orders[client_id]
@@ -99,13 +100,13 @@ class SimExecutor:
             px = max(o.price, bid)
         else:
             return
-        base = self._base(o.symbol)
+        base, q = base_quote(o.symbol)
         if o.side == "BUY":
-            self.balance[self.quote] = self.balance.get(self.quote, 0.0) - o.qty * px
+            self.balance[q] = self.balance.get(q, 0.0) - o.qty * px
             self.balance[base] = self.balance.get(base, 0.0) + o.qty * (1 - self.fee)
         else:
             self.balance[base] = self.balance.get(base, 0.0) - o.qty
-            self.balance[self.quote] = self.balance.get(self.quote, 0.0) + o.qty * px * (1 - self.fee)
+            self.balance[q] = self.balance.get(q, 0.0) + o.qty * px * (1 - self.fee)
         self.reserved.pop(cid, None)
         self.orders[cid] = replace(o, executed_qty=o.qty, avg_price=px, status="FILLED", active=False)
 
@@ -134,9 +135,8 @@ class SimExecutor:
 class WallexExecutor:
     is_live = True
 
-    def __init__(self, client: WallexClient, quote: str = "USDT"):
+    def __init__(self, client: WallexClient):
         self.client = client
-        self.quote = quote
         self._metas: dict[str, MarketMeta] = {}
 
     def load_markets(self, metas: dict[str, MarketMeta]) -> None:
@@ -151,11 +151,11 @@ class WallexExecutor:
         b = self.client.balances().get(asset, {})
         return max(0.0, float(b.get("value", 0) or 0) - float(b.get("locked", 0) or 0))
 
-    def free_quote(self) -> float:
-        return self._free(self.quote)
+    def free_quote(self, symbol: str) -> float:
+        return self._free(quote_of(symbol))
 
     def free_base(self, symbol: str) -> float:
-        return self._free(self.meta(symbol).base)
+        return self._free(base_quote(symbol)[0])
 
     def place_limit(self, side: str, symbol: str, price: float, qty: float, client_id: str) -> OrderInfo:
         m = self.meta(symbol)

@@ -19,12 +19,16 @@ from advisor.config import Config, MAX_LOSS_CAP_PCT             # noqa: E402
 from advisor.execution import SimExecutor, WallexExecutor       # noqa: E402
 from advisor.market import wallex_candles                       # noqa: E402
 from advisor.strategy import Advice                             # noqa: E402
-from advisor.trader import PREFIX, Trader                       # noqa: E402
-from advisor.wallex import fmt_fixed, parse_markets, parse_snapshot, round_down, round_up  # noqa: E402
+from advisor.trader import PREFIX, Position, Trader             # noqa: E402
+from advisor.wallex import fmt_fixed, parse_markets, parse_snapshot, quote_of, round_down, round_up  # noqa: E402
 
 MARKETS = {"BTCUSDT": {"baseAsset": "BTC", "quoteAsset": "USDT", "tickSize": 2, "stepSize": 6,
                        "minQty": 1e-6, "minNotional": 10,
-                       "stats": {"bidPrice": "99.9", "askPrice": "100", "lastPrice": "99.95", "24h_ch": 1.5}}}
+                       "stats": {"bidPrice": "99.9", "askPrice": "100", "lastPrice": "99.95", "24h_ch": 1.5}},
+           "BTCTMN": {"baseAsset": "BTC", "quoteAsset": "TMN", "tickSize": 0, "stepSize": 6,
+                      "minQty": 1e-6, "minNotional": 1000000,
+                      "stats": {"bidPrice": "3000000000", "askPrice": "3000100000", "lastPrice": "3000050000",
+                                "24h_ch": 0.5}}}
 
 
 def buy_advice(price=100.0, amount=200.0):
@@ -50,8 +54,9 @@ def setup(tmp_path):
                      symbols=["BTCUSDT"], output_dir=str(tmp_path), order_timeout_s=45, **kw)
         cfg.validate()
         mkt = Market()
-        ex = SimExecutor(parse_markets(MARKETS), mkt, quote="USDT",
-                         start_quote=start_quote if start_quote is not None else capital, fee_rate=cfg.fee_rate)
+        ex = SimExecutor(parse_markets(MARKETS), mkt,
+                         start_balances={"USDT": start_quote if start_quote is not None else capital, "TMN": 0.0},
+                         fee_rate=cfg.fee_rate)
         logs = []
         tr = Trader(cfg, ex, tmp_path / "trader.json", log=logs.append)
         return cfg, mkt, ex, tr, logs
@@ -113,7 +118,8 @@ def test_take_profit_fills_and_books_gain(setup):
     assert t["reason"].startswith("take-profit") and t["pnl_quote"] > 0
     # filled at the 105.50 bid (better than the 105.00 limit): 5.5% gross minus about 0.4% fees
     assert t["pnl_pct"] == pytest.approx(5.5 - 2 * cfg.fee_rate * 100, abs=0.1)
-    assert tr.realised_total == pytest.approx(t["pnl_quote"])
+    assert tr.realised_total["USDT"] == pytest.approx(t["pnl_quote"])
+    assert tr.realised_total["TMN"] == 0
 
 
 def test_stop_loss_exits_and_books_loss(setup):
@@ -162,7 +168,7 @@ def test_daily_loss_halts_buys_then_new_day_resumes(setup):
 
 def test_drawdown_halt_needs_manual_resume(setup):
     cfg, mkt, ex, tr, _ = setup(capital=100.0, max_drawdown_kill=0.05)
-    tr.realised_total = -6.0
+    tr.realised_total = {"USDT": -6.0, "TMN": 0.0}
     tr._check_limits()
     assert tr.halted and tr.halt_kind == "drawdown"
     tr._roll_day()
@@ -250,12 +256,13 @@ class FakeWallex:
 
 def test_wallex_executor_sends_documented_fields():
     fake = FakeWallex()
-    ex = WallexExecutor(fake, quote="USDT")
+    ex = WallexExecutor(fake)
     ex.load_markets(parse_markets(MARKETS))
     o = ex.place_limit("BUY", "BTCUSDT", 100.1, 1.998002, "ADVBabc123")
     assert fake.placed[0] == ("BTCUSDT", "BUY", "100.10", "1.998002", "ADVBabc123")
     assert o.status == "NEW" and not o.terminal
-    assert ex.free_quote() == pytest.approx(400.0) and ex.free_base("BTCUSDT") == pytest.approx(0.2)
+    assert ex.free_quote("BTCUSDT") == pytest.approx(400.0) and ex.free_base("BTCUSDT") == pytest.approx(0.2)
+    assert ex.free_quote("BTCTMN") == 0.0                               # no TMN in this test wallet
     assert ex.open_order_ids() == [("MANUAL9", "ETHUSDT")]
     assert ex.get("ADVBabc123").filled
 
@@ -359,3 +366,72 @@ def test_kill_flag_from_command_line_halts_running_bot(tmp_path):
     bot.resume()
     assert not (tmp_path / KILL_FLAG).exists() and not bot.trader.halted
     clear_kill_flag(tmp_path)                       # idempotent
+
+
+# ---------------------------------------------------------------- TMN markets and per-currency money
+def test_market_names_split_into_base_and_quote():
+    from advisor.wallex import base_quote
+    assert base_quote("BTCUSDT") == ("BTC", "USDT")
+    assert base_quote("USDTTMN") == ("USDT", "TMN")
+    assert base_quote("BTCTMN") == ("BTC", "TMN")
+    with pytest.raises(ValueError):
+        base_quote("BTCEUR")
+
+
+def test_config_refuses_tmn_market_without_tmn_capital():
+    with pytest.raises(ValueError, match="capital_tmn"):
+        Config(symbols=["BTCTMN"], capital_tmn=0).validate()
+    Config(symbols=["BTCTMN"], capital_tmn=1e8).validate()
+
+
+def test_tmn_round_trip_books_profit_in_toman_only(tmp_path):
+    cfg = Config(capital=1000.0, capital_tmn=1e8, max_loss_pct=5.0, min_profit_pct=5.0,
+                 trading_mode="dry_run", symbols=["BTCTMN"], output_dir=str(tmp_path))
+    cfg.validate()
+    mkt = Market(bid=3000000000.0, ask=3000100000.0)
+    ex = SimExecutor(parse_markets(MARKETS), mkt,
+                     start_balances={"USDT": 1000.0, "TMN": 1e8}, fee_rate=cfg.fee_rate)
+    tr = Trader(cfg, ex, tmp_path / "t.json", log=lambda *_: None)
+    adv = Advice("BTCTMN", "t", 3000050000.0, "BUY", "test", prob_up=0.8, net_edge=0.05, amount_quote=2e7)
+    tr.on_advice(adv, 3000000000.0, 3000100000.0, {"BTCTMN": 3000000000.0})
+    tr.on_tick("BTCTMN", 3000000000.0, 3000100000.0)
+    pos = tr.positions["BTCTMN"]
+    assert pos.phase == "holding"
+    assert ex.free_quote("BTCTMN") == pytest.approx(1e8 - 2e7, rel=2e-3)   # filled at the ask, a bit under budget
+    assert ex.balance["USDT"] == 1000.0
+    mkt.move(pos.take * 1.01, pos.take * 1.01 + 1000)
+    ex.tick()
+    tr.on_tick("BTCTMN", mkt.bid, mkt.ask)
+    assert "BTCTMN" not in tr.positions
+    assert tr.realised_total["TMN"] > 0 and tr.realised_total["USDT"] == 0
+    assert tr.trades[-1]["quote"] == "TMN"
+
+
+def test_tmn_buy_skipped_when_no_tmn_capital(setup):
+    cfg, mkt, ex, tr, _ = setup()
+    msg = tr.on_advice(Advice("BTCTMN", "t", 3e9, "BUY", "x", amount_quote=2e7), 3e9, 3.0001e9, {})
+    assert msg and "no TMN capital" in msg[0] and "BTCTMN" not in tr.positions
+
+
+def test_limits_are_checked_per_currency(tmp_path):
+    cfg = Config(capital=1000.0, capital_tmn=1e8, max_daily_loss_frac=0.03, max_drawdown_kill=0.15,
+                 symbols=["BTCUSDT", "BTCTMN"], output_dir=str(tmp_path))
+    ex = SimExecutor({}, lambda s: (0, 0), start_balances={"USDT": 1000.0, "TMN": 1e8})
+    tr = Trader(cfg, ex, tmp_path / "t.json", log=lambda *_: None)
+    tr.realised_today = {"USDT": 0.0, "TMN": -2e6}            # 2% of TMN capital: below the 3% limit
+    tr._check_limits()
+    assert not tr.halted
+    tr.realised_today = {"USDT": 0.0, "TMN": -4e6}            # 4%: halts
+    tr._check_limits()
+    assert tr.halted and tr.halt_kind == "daily" and "TMN" in tr.halt_reason
+
+
+def test_exposure_is_counted_per_currency(tmp_path):
+    cfg = Config(capital=1000.0, capital_tmn=1e8, symbols=["BTCUSDT", "BTCTMN"], output_dir=str(tmp_path))
+    ex = SimExecutor({}, lambda s: (0, 0), start_balances={})
+    tr = Trader(cfg, ex, tmp_path / "t.json", log=lambda *_: None)
+    tr.positions["BTCUSDT"] = Position("BTCUSDT", "holding", "", "", 0, 0, "", 0, entry_price=100, qty=2, stop=0, take=0)
+    tr.positions["BTCTMN"] = Position("BTCTMN", "holding", "", "", 0, 0, "", 0, entry_price=3e9, qty=0.01, stop=0, take=0)
+    bids = {"BTCUSDT": 100.0, "BTCTMN": 3e9}
+    assert tr.exposure(bids, "USDT") == pytest.approx(200.0)
+    assert tr.exposure(bids, "TMN") == pytest.approx(3e7)

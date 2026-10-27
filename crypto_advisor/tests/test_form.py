@@ -55,3 +55,15 @@ def test_typed_confirmation():
     assert live_confirmed("  i accept   risk ")
     assert not live_confirmed("yes")
     assert not live_confirmed("")
+
+
+def test_tmn_market_needs_tmn_capital_in_form():
+    cfg, errs = parse_form(Config(), {**GOOD, "symbols": "BTCTMN", "capital_tmn": "0"}, has_key=False)
+    assert cfg is None and errs
+    cfg, errs = parse_form(Config(), {**GOOD, "symbols": "BTCTMN, BTCUSDT", "capital_tmn": "100000000"}, False)
+    assert errs == [] and cfg.capital_tmn == 1e8 and cfg.symbols == ["BTCTMN", "BTCUSDT"]
+
+
+def test_unsupported_market_refused():
+    cfg, errs = parse_form(Config(), {**GOOD, "symbols": "BTCEUR"}, has_key=False)
+    assert cfg is None and errs

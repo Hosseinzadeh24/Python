@@ -17,7 +17,7 @@ from .market import MarketDataError, fetch_candles
 from .notify import Notifier, format_alert
 from .strategy import Advice, Holding, advise, default_params, limits_from, load_params
 from .trader import PREFIX, Trader
-from .wallex import WallexClient, parse_markets, parse_snapshot
+from .wallex import WallexClient, parse_markets, parse_snapshot, quote_of
 
 ALERT_KINDS_IMPORTANT = ("BUY_SIGNAL", "SELL_SIGNAL", "OPPORTUNITY")
 PREFIX_ORDERS = PREFIX               # client-id prefix of every order this app places
@@ -57,8 +57,9 @@ class Bot:
         if self.cfg.trading_mode == "live":
             if not self.client.api_key:
                 raise ExecutionError("live mode needs your Wallex API key")
-            return WallexExecutor(self.client, quote="USDT")
-        return SimExecutor({}, self.price_pair, quote="USDT", start_quote=self.cfg.capital,
+            return WallexExecutor(self.client)
+        return SimExecutor({}, self.price_pair,
+                           start_balances={"USDT": self.cfg.capital, "TMN": self.cfg.capital_tmn},
                            fee_rate=self.cfg.fee_rate)
 
     def check_key(self) -> str:
@@ -133,11 +134,12 @@ class Bot:
             holding = None
             if pos is not None and pos.phase == "holding":
                 holding = Holding(sym, pos.qty, pos.entry_price, pos.stop, pos.take)
-            held_value = self.trader.exposure(bids)
-            exposure_left = cfg.capital * cfg.max_total_exposure - held_value
+            q = quote_of(sym)
+            scfg = cfg.scoped(q)                     # this market's capital and minimum order
+            exposure_left = scfg.capital * cfg.max_total_exposure - self.trader.exposure(bids, q)
             prm = params.get(sym, default_params(cfg))
             price = self.snapshot[sym]["last"] or ask
-            adv = advise(sym, df, price, prm, cfg, limits, holding, exposure_left)
+            adv = advise(sym, df, price, prm, scfg, limits, holding, exposure_left)
             self.last_advice[sym] = adv
             advices.append(adv)
             if cfg.trading_mode != "suggest":

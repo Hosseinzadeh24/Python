@@ -1,16 +1,22 @@
 {
-  "_help": "Settings. trading_mode: suggest (no orders) | dry_run (simulated orders, no money) | live (REAL orders). max_loss_pct is capped at 15. You can also change these in the window (python main.py --gui).",
+  "_help": "Settings. trading_mode: suggest (no orders) | dry_run (simulated orders, no money) | live (REAL orders). max_loss_pct is capped at 15. You can also change these in the window (python main.py --gui). capital_tmn is the toman budget for BTCTMN-style markets; 0 keeps TMN markets off.",
   "exchange_name": "Wallex",
   "data_provider": "wallex",
-  "symbols": ["BTCUSDT", "ETHUSDT"],
+  "symbols": [
+    "BTCUSDT",
+    "ETHUSDT",
+    "SOLUSDT"
+  ],
   "timeframe": "1h",
   "trading_mode": "suggest",
   "max_loss_pct": 5.0,
   "min_profit_pct": 5.0,
   "max_hold_hours": 72.0,
   "capital": 1000.0,
+  "capital_tmn": 0.0,
   "max_total_exposure": 0.6,
   "min_order_quote": 10.0,
+  "min_order_tmn": 500000.0,
   "max_position_frac": 0.25,
   "max_daily_loss_frac": 0.03,
   "max_drawdown_kill": 0.15,
@@ -36,6 +42,9 @@
   "sharp_move_pct": 0.02,
   "beep": true,
   "calibration_periods": 4,
-  "target_weekly_returns": [0.10, 0.15],
+  "target_weekly_returns": [
+    0.1,
+    0.15
+  ],
   "output_dir": "output"
 }

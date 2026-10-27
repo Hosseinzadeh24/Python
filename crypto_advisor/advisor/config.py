@@ -15,7 +15,7 @@ class Config:
     # --- exchange & data -----------------------------------------------------------
     exchange_name: str = "Wallex"
     data_provider: str = "wallex"                     # "wallex" (default) or "binance" (public data only)
-    symbols: list[str] = field(default_factory=lambda: ["BTCUSDT", "ETHUSDT"])
+    symbols: list[str] = field(default_factory=lambda: ["BTCUSDT", "ETHUSDT", "SOLUSDT"])
     timeframe: str = "1h"
     binance_urls: list[str] = field(default_factory=lambda: [
         "https://api.binance.com", "https://data-api.binance.vision"])
@@ -29,9 +29,11 @@ class Config:
     min_profit_pct: float = 5.0                       # take-profit: sell when price rises this much above entry
     max_hold_hours: float = 72.0                      # close a position after this many hours
     # --- money -----------------------------------------------------------------------
-    capital: float = 1000.0                           # USDT the bot may use
+    capital: float = 1000.0                           # USDT the bot may use (for *USDT markets)
+    capital_tmn: float = 0.0                          # TMN the bot may use (for *TMN markets); 0 = no TMN trading
     max_total_exposure: float = 0.60                  # at most 60% of capital invested at once
-    min_order_quote: float = 10.0
+    min_order_quote: float = 10.0                     # USDT
+    min_order_tmn: float = 500000.0                   # TMN
     max_position_frac: float = 0.25                   # at most 25% of capital in one coin
     max_daily_loss_frac: float = 0.03                 # halt new buys after -3% realised loss in a day
     max_drawdown_kill: float = 0.15                   # halt all trading after -15% total realised loss
@@ -66,6 +68,18 @@ class Config:
     target_weekly_returns: list[float] = field(default_factory=lambda: [0.10, 0.15])
     # --- output ----------------------------------------------------------------------
     output_dir: str = "output"
+
+    def capital_for(self, quote: str) -> float:
+        return self.capital if quote == "USDT" else self.capital_tmn
+
+    def min_order_for(self, quote: str) -> float:
+        return self.min_order_quote if quote == "USDT" else self.min_order_tmn
+
+    def scoped(self, quote: str) -> "Config":
+        """Copy of this config with the capital and minimum order of one quote currency."""
+        import dataclasses
+        return dataclasses.replace(self, capital=self.capital_for(quote),
+                                   min_order_quote=self.min_order_for(quote))
 
     @property
     def out(self) -> Path:
@@ -116,6 +130,13 @@ class Config:
             raise ValueError("max_position_frac must be in (0, 1]")
         if self.capital <= 0:
             raise ValueError("capital must be positive")
+        if self.capital_tmn < 0 or self.min_order_tmn <= 0:
+            raise ValueError("capital_tmn must be >= 0 and min_order_tmn must be positive")
+        from .wallex import base_quote
+        for s in self.symbols:
+            base_quote(s)                                  # raises for unsupported markets
+            if base_quote(s)[1] == "TMN" and self.capital_tmn <= 0:
+                raise ValueError(f"{s} is a TMN market: set capital_tmn (toman) first")
         if self.cycle_minutes < 1 or self.tick_seconds < 2:
             raise ValueError("cycle_minutes >= 1 and tick_seconds >= 2")
         if self.data_provider not in ("wallex", "binance"):

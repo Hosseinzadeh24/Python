@@ -49,11 +49,13 @@ class App:
 
         risk = ttk.LabelFrame(r, text="Settings  (تنظیمات)")
         risk.pack(fill="x", padx=8, pady=4)
-        self.vars = {k: tk.StringVar() for k in ("max_loss", "min_profit", "capital", "exposure", "symbols")}
+        self.vars = {k: tk.StringVar() for k in ("max_loss", "min_profit", "capital", "capital_tmn",
+                                                  "exposure", "symbols")}
         fields = [
             ("Max loss % (1 to 15)", "max_loss"),
             ("Min profit % (take-profit)", "min_profit"),
             ("Capital (USDT)", "capital"),
+            ("Capital (TMN, 0 = off)", "capital_tmn"),
             ("Max invested %", "exposure"),
             ("Markets (comma separated)", "symbols"),
         ]
@@ -63,13 +65,13 @@ class App:
                 row=i // 3, column=(i % 3) * 2 + 1, sticky="w", padx=(0, 10), pady=3)
         self.mode_var = tk.StringVar(value="suggest")
         mode_box = ttk.Frame(risk)
-        mode_box.grid(row=2, column=0, columnspan=6, sticky="w", padx=8, pady=3)
+        mode_box.grid(row=3, column=0, columnspan=6, sticky="w", padx=8, pady=3)
         ttk.Label(mode_box, text="Mode:").pack(side="left")
         for val, txt in (("suggest", "Suggest only (no orders)"), ("dry_run", "Dry run (simulated, no money)"),
                          ("live", "LIVE (real orders)")):
             ttk.Radiobutton(mode_box, text=txt, value=val, variable=self.mode_var).pack(side="left", padx=8)
         self.msg = ttk.Label(risk, text="", foreground="#b00020", wraplength=1000, justify="left")
-        self.msg.grid(row=3, column=0, columnspan=6, sticky="w", padx=8, pady=2)
+        self.msg.grid(row=4, column=0, columnspan=6, sticky="w", padx=8, pady=2)
 
         btns = ttk.Frame(r)
         btns.pack(fill="x", padx=8, pady=4)
@@ -102,6 +104,7 @@ class App:
         self.vars["max_loss"].set(f"{c.max_loss_pct:g}")
         self.vars["min_profit"].set(f"{c.min_profit_pct:g}")
         self.vars["capital"].set(f"{c.capital:g}")
+        self.vars["capital_tmn"].set(f"{c.capital_tmn:g}")
         self.vars["exposure"].set(f"{c.max_total_exposure * 100:g}")
         self.vars["symbols"].set(", ".join(c.symbols))
         self.mode_var.set(c.trading_mode)
@@ -274,9 +277,13 @@ class App:
                                                 f"{ch:+.2f}", pup, act, pos))
         s = data["summary"]
         halt = f"HALTED: {s['halt_reason']}" if s["halted"] else "trading allowed"
-        self.status.config(text=f"{self.cfg.trading_mode}  |  {halt}  |  realised today {s['realised_today']:+.2f}"
-                                f"  total {s['realised_total']:+.2f}  |  open positions {s['open_positions']}"
-                                f"  |  exposure {s['exposure']:.2f} USDT")
+        def money(d: dict) -> str:
+            return "  ".join(f"{q} {v:+,.2f}" for q, v in d.items())
+        def used(d: dict) -> str:
+            return "  ".join(f"{q} {v:,.2f}" for q, v in d.items() if v)
+        self.status.config(text=f"{self.cfg.trading_mode}  |  {halt}  |  realised today: {money(s['realised_today'])}"
+                                f"  total: {money(s['realised_total'])}  |  open positions {s['open_positions']}"
+                                f"  |  in use: {used(s['exposure']) or '0'}")
 
 
 def run_gui(cfg: Config) -> None:
