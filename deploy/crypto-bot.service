@@ -1,0 +1,17 @@
+# 24/7 operation on a Linux server (VPS). Copy to /etc/systemd/system/ then:
+#   sudo systemctl daemon-reload && sudo systemctl enable --now crypto-bot
+# Secrets (API keys, tokens) go in /opt/crypto-bot/.env, never in the repository.
+[Unit]
+Description=Crypto trading bot (24/7)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+WorkingDirectory=/opt/crypto-bot
+EnvironmentFile=-/opt/crypto-bot/.env
+ExecStart=/opt/crypto-bot/.venv/bin/python -m crypto_bot run
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

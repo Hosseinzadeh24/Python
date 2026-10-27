@@ -1,0 +1,13 @@
+# Serves data/status.json to the Android app. Requires BOT_STATUS_TOKEN in /opt/crypto-bot/.env
+[Unit]
+Description=Crypto bot status endpoint
+After=network-online.target
+
+[Service]
+WorkingDirectory=/opt/crypto-bot
+EnvironmentFile=-/opt/crypto-bot/.env
+ExecStart=/opt/crypto-bot/.venv/bin/python -m crypto_bot serve-status --port 8080
+Restart=always
+
+[Install]
+WantedBy=multi-user.target

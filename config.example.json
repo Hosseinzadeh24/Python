@@ -1,0 +1,22 @@
+{
+  "exchange": "binance",
+  "symbols": ["BTC/USDT", "ETH/USDT", "SOL/USDT"],
+  "timeframe": "1h",
+  "capital": 1000,
+  "mode": "paper",
+  "horizon_bars": 4,
+  "train_bars": 1440,
+  "test_bars": 168,
+  "fee_rate": 0.001,
+  "slippage": 0.0005,
+  "kelly_fraction": 0.25,
+  "max_position_frac": 0.25,
+  "max_daily_loss_frac": 0.03,
+  "max_drawdown_kill": 0.15,
+  "alert_min_prob": 0.7,
+  "alert_min_net_edge": 0.03,
+  "calibration_periods": 4,
+  "data_dir": "data",
+  "report_dir": "reports",
+  "poll_seconds": 60
+}

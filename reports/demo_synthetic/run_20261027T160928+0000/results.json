@@ -1,0 +1,250 @@
+{
+  "created_utc": "2026-10-27T16:09:28+00:00",
+  "periods": [
+    {
+      "period": 1,
+      "start": "2024-03-01 00:00:00+00:00",
+      "end": "2024-03-07 23:00:00+00:00",
+      "bot_return": 3.814238113686308e-05,
+      "bot_max_drawdown": -0.005000795246401846,
+      "bot_trades": 3,
+      "bot_win_rate": 0.25,
+      "baseline_return": -0.005727634892653377,
+      "buy_hold_return": -0.04938799379285275,
+      "beats_baseline": true,
+      "per_symbol_return": {
+        "BTC/USDT": 0.00027101438234189423,
+        "ETH/USDT": 0.0,
+        "SOL/USDT": -0.00015658723893163806
+      },
+      "per_symbol_buy_hold": {
+        "BTC/USDT": -0.1385350234876701,
+        "ETH/USDT": 0.07357507820964271,
+        "SOL/USDT": -0.08320403610053084
+      },
+      "chosen_params": {
+        "BTC/USDT": {
+          "p_enter": 0.65,
+          "p_exit": 0.45,
+          "stop_mult": 1.5,
+          "take_mult": 3.0,
+          "max_hold_bars": 24
+        },
+        "ETH/USDT": {
+          "p_enter": 0.6,
+          "p_exit": 0.45,
+          "stop_mult": 2.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 24
+        },
+        "SOL/USDT": {
+          "p_enter": 0.55,
+          "p_exit": 0.5,
+          "stop_mult": 2.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 12
+        }
+      },
+      "target_hits": {
+        "10%": false,
+        "15%": false
+      },
+      "end_equity": 1000.0381423811368
+    },
+    {
+      "period": 2,
+      "start": "2024-03-08 00:00:00+00:00",
+      "end": "2024-03-14 23:00:00+00:00",
+      "bot_return": -0.0009822608843310654,
+      "bot_max_drawdown": -0.002959889085013767,
+      "bot_trades": 1,
+      "bot_win_rate": 0.0,
+      "baseline_return": -0.003139249122126375,
+      "buy_hold_return": -0.03658412168437386,
+      "beats_baseline": true,
+      "per_symbol_return": {
+        "BTC/USDT": 0.0,
+        "ETH/USDT": -0.002946782652992863,
+        "SOL/USDT": 0.0
+      },
+      "per_symbol_buy_hold": {
+        "BTC/USDT": -0.10562281510754312,
+        "ETH/USDT": 0.004496436929717797,
+        "SOL/USDT": -0.008625986875296253
+      },
+      "chosen_params": {
+        "BTC/USDT": {
+          "p_enter": 0.55,
+          "p_exit": 0.45,
+          "stop_mult": 2.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 12
+        },
+        "ETH/USDT": {
+          "p_enter": 0.65,
+          "p_exit": 0.45,
+          "stop_mult": 2.5,
+          "take_mult": 3.0,
+          "max_hold_bars": 12
+        },
+        "SOL/USDT": {
+          "p_enter": 0.55,
+          "p_exit": 0.5,
+          "stop_mult": 2.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 12
+        }
+      },
+      "target_hits": {
+        "10%": false,
+        "15%": false
+      },
+      "end_equity": 999.017739115669
+    },
+    {
+      "period": 3,
+      "start": "2024-03-15 00:00:00+00:00",
+      "end": "2024-03-21 23:00:00+00:00",
+      "bot_return": -0.00027325343648565426,
+      "bot_max_drawdown": -0.0021480892891253545,
+      "bot_trades": 2,
+      "bot_win_rate": 0.25,
+      "baseline_return": -0.004199967250136161,
+      "buy_hold_return": -0.0016009324468549229,
+      "beats_baseline": true,
+      "per_symbol_return": {
+        "BTC/USDT": 0.0,
+        "ETH/USDT": -0.0008197603094570738,
+        "SOL/USDT": 0.0
+      },
+      "per_symbol_buy_hold": {
+        "BTC/USDT": -0.2130774308101958,
+        "ETH/USDT": 0.0026413217006864293,
+        "SOL/USDT": 0.20563331176894462
+      },
+      "chosen_params": {
+        "BTC/USDT": {
+          "p_enter": 0.65,
+          "p_exit": 0.45,
+          "stop_mult": 1.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 12
+        },
+        "ETH/USDT": {
+          "p_enter": 0.65,
+          "p_exit": 0.45,
+          "stop_mult": 2.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 12
+        },
+        "SOL/USDT": {
+          "p_enter": 0.55,
+          "p_exit": 0.45,
+          "stop_mult": 2.5,
+          "take_mult": 3.0,
+          "max_hold_bars": 12
+        }
+      },
+      "target_hits": {
+        "10%": false,
+        "15%": false
+      },
+      "end_equity": 999.7267465635143
+    },
+    {
+      "period": 4,
+      "start": "2024-03-22 00:00:00+00:00",
+      "end": "2024-03-28 23:00:00+00:00",
+      "bot_return": -0.0005633164966059034,
+      "bot_max_drawdown": -0.0030943277911852363,
+      "bot_trades": 3,
+      "bot_win_rate": 0.2,
+      "baseline_return": -0.010497127852893251,
+      "buy_hold_return": -0.07650496504207294,
+      "beats_baseline": true,
+      "per_symbol_return": {
+        "BTC/USDT": 0.0,
+        "ETH/USDT": -0.0016899494898175993,
+        "SOL/USDT": 0.0
+      },
+      "per_symbol_buy_hold": {
+        "BTC/USDT": -0.07377441899966963,
+        "ETH/USDT": -0.06551461315003626,
+        "SOL/USDT": -0.09022586297651292
+      },
+      "chosen_params": {
+        "BTC/USDT": {
+          "p_enter": 0.6,
+          "p_exit": 0.5,
+          "stop_mult": 1.5,
+          "take_mult": 3.0,
+          "max_hold_bars": 12
+        },
+        "ETH/USDT": {
+          "p_enter": 0.6,
+          "p_exit": 0.45,
+          "stop_mult": 1.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 12
+        },
+        "SOL/USDT": {
+          "p_enter": 0.65,
+          "p_exit": 0.45,
+          "stop_mult": 1.5,
+          "take_mult": 2.0,
+          "max_hold_bars": 12
+        }
+      },
+      "target_hits": {
+        "10%": false,
+        "15%": false
+      },
+      "end_equity": 999.4366835033941
+    }
+  ],
+  "summary": {
+    "periods": 4,
+    "mean_period_return": -0.00044517210907144,
+    "std_period_return": 0.0004341932654340109,
+    "min_period_return": -0.0009822608843310654,
+    "max_period_return": 3.814238113686308e-05,
+    "periods_beating_baseline": 4,
+    "target_hit_counts": {
+      "10%": 0,
+      "15%": 0
+    },
+    "note": "Out-of-sample estimates on the data provided. Not a guarantee of future profit."
+  },
+  "config": {
+    "exchange": "binance",
+    "symbols": [
+      "BTC/USDT",
+      "ETH/USDT",
+      "SOL/USDT"
+    ],
+    "timeframe": "1h",
+    "capital": 1000.0,
+    "mode": "paper",
+    "horizon_bars": 4,
+    "train_bars": 1440,
+    "test_bars": 168,
+    "retrain_every_bars": 24,
+    "fee_rate": 0.001,
+    "slippage": 0.0005,
+    "kelly_fraction": 0.25,
+    "max_position_frac": 0.25,
+    "max_daily_loss_frac": 0.03,
+    "max_drawdown_kill": 0.15,
+    "alert_min_prob": 0.7,
+    "alert_min_net_edge": 0.03,
+    "calibration_periods": 4,
+    "target_weekly_returns": [
+      0.1,
+      0.15
+    ],
+    "seed": 42,
+    "data_dir": "data/demo",
+    "report_dir": "reports/demo_synthetic",
+    "poll_seconds": 60
+  }
+}

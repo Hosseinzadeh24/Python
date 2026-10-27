@@ -1,0 +1,17 @@
+# secrets and local state (never commit API keys)
+.env
+config.json
+data/
+# generated results (keep only the curated demo under reports/demo_synthetic)
+reports/*
+!reports/demo_synthetic/
+!reports/README.md
+# python / build
+__pycache__/
+*.pyc
+.pytest_cache/
+.venv/
+.venv_bot/
+mobile/.buildozer/
+mobile/bin/
+mobile/settings.json
