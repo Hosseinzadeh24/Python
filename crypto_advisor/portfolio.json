@@ -1,0 +1,4 @@
+{
+  "_help": "Put the coins YOU hold here. The advisor then suggests SELL / HOLD for them (stop-loss, take-profit). Example: {\"symbol\": \"BTCUSDT\", \"qty\": 0.01, \"entry_price\": 60000, \"stop_price\": null, \"take_price\": null}",
+  "holdings": []
+}

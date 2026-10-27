@@ -2,6 +2,9 @@
 
 Resource of requirements for learning python package
 
+> **نسخهٔ جدید (پیشنهاد هر ۱۵ دقیقه، ویندوز):** پوشهٔ [`crypto_advisor/`](crypto_advisor/README.md) را ببینید. نسخهٔ قبلی (ربات معامله‌گر خودکار) در پوشهٔ `crypto_bot/` باقی مانده است.
+
+
 ---
 
 # ربات معامله‌گر رمزارز (Crypto Trading Engine)
