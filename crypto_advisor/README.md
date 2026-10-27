@@ -32,6 +32,8 @@
 ۲. پوشه `crypto_advisor` را در VS Code باز کنید.
 ۳. فایل **`setup_windows.bat`** را اجرا کنید. کتابخانه‌ها (از جمله `keyring`) نصب می‌شوند.
 
+**اگر خطای `No module named 'pandas'` (یا `ModuleNotFoundError`) دیدید:** یعنی مرحله ۳ کامل نشده است. `setup_windows.bat` را دوباره اجرا کنید و منتظر پیام «Setup finished» بمانید. اگر از VS Code اجرا می‌کنید، با Ctrl+Shift+P گزینه **Python: Select Interpreter** را بزنید و `.venv\Scripts\python.exe` را انتخاب کنید. فایل‌های `run_*.bat` بدون پوشه `.venv` اجرا نمی‌شوند و خطای راهنما نشان می‌دهند.
+
 ---
 
 ## ۳. کلید API والکس

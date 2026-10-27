@@ -26,6 +26,47 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
+
+def _check_dependencies() -> None:
+    """Stop early with a clear message if the libraries from requirements.txt are missing.
+
+    Without this check the user sees a raw ModuleNotFoundError traceback, usually because
+    setup_windows.bat was not run and Python is not using the .venv folder.
+    """
+    # (import name, pip package name)
+    required = [
+        ("numpy", "numpy"),
+        ("pandas", "pandas"),
+        ("sklearn", "scikit-learn"),
+        ("matplotlib", "matplotlib"),
+        ("requests", "requests"),
+        ("keyring", "keyring"),
+    ]
+    missing = []
+    for module, package in required:
+        try:
+            __import__(module)
+        except ImportError:
+            missing.append(package)
+    if not missing:
+        return
+    message = (
+        "\n[ERROR] Required libraries are missing: " + ", ".join(missing) + "\n"
+        f"Python in use: {sys.executable}\n"
+        "Fix: double-click setup_windows.bat once (it creates the .venv folder and installs them),\n"
+        "then start the app with run_once.bat, run_gui.bat, run_every_15_min.bat, etc.\n"
+        "\n[خطا] کتابخانه‌های لازم نصب نیستند. فایل setup_windows.bat را یک‌بار اجرا کنید،\n"
+        "سپس برنامه را با run_once.bat یا run_gui.bat یا فایل‌های دیگر .bat اجرا کنید.\n"
+    )
+    try:
+        sys.stderr.write(message)
+    except UnicodeEncodeError:
+        sys.stderr.write(message.encode("ascii", "replace").decode("ascii"))
+    sys.exit(1)
+
+
+_check_dependencies()
+
 from advisor.config import Config  # noqa: E402
 from advisor.market import demo_frame, fetch_candles  # noqa: E402
 from advisor.notify import Notifier, format_alert  # noqa: E402
