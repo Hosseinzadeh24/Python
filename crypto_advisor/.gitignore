@@ -1,3 +1,11 @@
 output/
 __pycache__/
 .venv/
+.pytest_cache/
+# never commit API keys or credential files
+*.key
+*_key.txt
+wallex_key*
+.env
+credentials*.json
+!config.json

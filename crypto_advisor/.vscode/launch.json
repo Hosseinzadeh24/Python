@@ -2,6 +2,17 @@
   "version": "0.2.0",
   "configurations": [
     {
+      "name": "Advisor: window (Wallex)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "args": [
+        "--gui"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
       "name": "Advisor: run once",
       "type": "debugpy",
       "request": "launch",
@@ -14,7 +25,9 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
-      "args": ["--loop"],
+      "args": [
+        "--loop"
+      ],
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}"
     },
@@ -23,7 +36,20 @@
       "type": "debugpy",
       "request": "launch",
       "program": "${workspaceFolder}/main.py",
-      "args": ["--backtest"],
+      "args": [
+        "--backtest"
+      ],
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Advisor: kill switch (cancel our orders)",
+      "type": "debugpy",
+      "request": "launch",
+      "program": "${workspaceFolder}/main.py",
+      "args": [
+        "--kill"
+      ],
       "console": "integratedTerminal",
       "cwd": "${workspaceFolder}"
     }

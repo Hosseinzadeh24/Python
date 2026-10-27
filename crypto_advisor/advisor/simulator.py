@@ -26,6 +26,8 @@ class TradeParams:
     stop_mult: float = 2.0      # stop-loss distance in ATRs
     take_mult: float = 3.0      # take-profit distance in ATRs
     max_hold_bars: int = 24     # time stop
+    stop_pct: float | None = None   # fixed stop-loss fraction (your max loss %); None = use ATR multiple
+    take_pct: float | None = None   # fixed take-profit fraction (your min profit %); None = use ATR multiple
 
 
 @dataclass
@@ -128,8 +130,11 @@ def simulate(ohlc: pd.DataFrame, prob: pd.Series, params: TradeParams, limits: R
         # 4) entry signal at close -> order executes at next bar's open
         if (i < n - 1 and qty == 0 and not halted and not halted_day
                 and p[i] == p[i] and p[i] >= params.p_enter and a[i] == a[i] and c[i] > 0):
-            stop_pct = params.stop_mult * a[i] / c[i]
-            take_pct = params.take_mult * a[i] / c[i]
+            if params.stop_pct is not None and params.take_pct is not None:
+                stop_pct, take_pct = params.stop_pct, params.take_pct
+            else:
+                stop_pct = params.stop_mult * a[i] / c[i]
+                take_pct = params.take_mult * a[i] / c[i]
             if expected_net_edge(p[i], stop_pct, take_pct, cost) > min_net_edge:
                 frac = position_fraction(p[i], stop_pct, take_pct, limits)
                 if frac > 0:

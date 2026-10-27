@@ -1,6 +1,6 @@
 """Turns model output and market state into advice: BUY / SELL / HOLD / WAIT plus alerts.
 
-Nothing here places an order. The advice is only a suggestion for you to decide on.
+This module never places orders. The trader (trader.py) decides what to do with advice.
 """
 from __future__ import annotations
 
@@ -70,8 +70,8 @@ def load_params(cfg: Config) -> dict[str, TradeParams]:
 
 
 def default_params(cfg: Config) -> TradeParams:
-    return TradeParams(p_enter=cfg.p_enter, p_exit=cfg.p_exit, stop_mult=cfg.stop_mult,
-                       take_mult=cfg.take_mult, max_hold_bars=cfg.max_hold_bars)
+    return TradeParams(p_enter=cfg.p_enter, p_exit=cfg.p_exit, max_hold_bars=cfg.max_hold_bars,
+                       stop_pct=cfg.stop_frac, take_pct=cfg.take_frac)
 
 
 def train_model(df: pd.DataFrame, cfg: Config, limits: RiskLimits) -> Ensemble:
@@ -97,8 +97,8 @@ def advise(symbol: str, df: pd.DataFrame, price: float, prm: TradeParams, cfg: C
     model = train_model(df, cfg, limits)
     p = float(model.predict_proba(feats.iloc[[-1]]).iloc[0])
     a = float(atr(df).iloc[-1])
-    close = float(df["close"].iloc[-1])
-    stop_pct, take_pct = prm.stop_mult * a / close, prm.take_mult * a / close
+    # Your own percentages (max loss / min profit) replace the ATR-based levels.
+    stop_pct, take_pct = cfg.stop_frac, cfg.take_frac
     edge = expected_net_edge(p, stop_pct, take_pct, limits.round_trip_cost)
     trend = "UP" if last["sma10_sma30"] > 0 else "DOWN"
     buy_pressure = float(last["taker_ratio_6"]) if "taker_ratio_6" in last and last["taker_ratio_6"] == last["taker_ratio_6"] else None
@@ -111,7 +111,7 @@ def advise(symbol: str, df: pd.DataFrame, price: float, prm: TradeParams, cfg: C
     if holding is not None:
         stop = holding.stop_price or holding.entry_price * (1 - stop_pct)
         take = holding.take_price or holding.entry_price * (1 + take_pct)
-        trail = max(stop, price - prm.stop_mult * a)       # only ever move a stop UP
+        trail = price * (1 - stop_pct)                      # hint only: a stop may only move UP
         adv.stop_price, adv.take_price = stop, take
         adv.qty = holding.qty
         adv.amount_quote = holding.qty * price

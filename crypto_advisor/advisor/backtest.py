@@ -14,7 +14,7 @@ from __future__ import annotations
 import itertools
 import json
 import time
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -31,17 +31,19 @@ from .risk import RiskLimits
 PARAM_GRID = {
     "p_enter": [0.55, 0.60, 0.65],
     "p_exit": [0.45, 0.50],
-    "stop_mult": [1.5, 2.5],
-    "take_mult": [2.0, 3.0],
     "max_hold_bars": [12, 24],
 }
 WARMUP = 72  # bars of history needed by the indicators before a window starts
 VALIDATION_SHARE = 0.25
 
 
-def param_grid(grid: dict = PARAM_GRID) -> list[TradeParams]:
+def param_grid(grid: dict = PARAM_GRID, cfg: Config | None = None) -> list[TradeParams]:
+    """All combinations. With cfg, stops and targets are your fixed max-loss / min-profit percentages."""
     keys = list(grid)
-    return [TradeParams(**dict(zip(keys, vals))) for vals in itertools.product(*(grid[k] for k in keys))]
+    out = [TradeParams(**dict(zip(keys, vals))) for vals in itertools.product(*(grid[k] for k in keys))]
+    if cfg is not None:
+        out = [replace(p, stop_pct=cfg.stop_frac, take_pct=cfg.take_frac) for p in out]
+    return out
 
 
 def _score(res: SimResult, start_equity: float) -> float:
@@ -73,7 +75,7 @@ def walk_forward(frames: dict[str, pd.DataFrame], cfg: Config, periods: int | No
                  grid: list[TradeParams] | None = None,
                  log: Callable[[str], None] = print) -> dict:
     periods = periods or cfg.calibration_periods
-    grid = grid or param_grid()
+    grid = grid or param_grid(cfg=cfg)
     symbols = list(frames)
     common = frames[symbols[0]].index
     for s in symbols[1:]:
@@ -144,7 +146,7 @@ def walk_forward(frames: dict[str, pd.DataFrame], cfg: Config, periods: int | No
             sym_bh[s] = float(c.iloc[t1 - 1] / c.iloc[t0] - 1 - 2 * cfg.fee_rate)
             base_prob = pd.Series(np.nan, index=frames[s].index)
             base_prob.iloc[t0 - WARMUP:t1] = sma_crossover_prob(X).iloc[t0 - WARMUP:t1].values
-            rb = _run_window(frames[s], base_prob, t0, t1, TradeParams(), limits, share)
+            rb = _run_window(frames[s], base_prob, t0, t1, TradeParams(stop_pct=cfg.stop_frac, take_pct=cfg.take_frac), limits, share)
             sym_base[s] = metrics(rb, share)
             sym_eq_base.append(rb.equity.rename(s))
 

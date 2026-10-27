@@ -1,4 +1,4 @@
-"""Public Binance market data (no API key). Falls back to a second Binance host if one is blocked."""
+"""Historical candles and prices. Default source: Wallex. Optional: Binance public data."""
 from __future__ import annotations
 
 import time
@@ -6,12 +6,46 @@ import time
 import pandas as pd
 import requests
 
+from .wallex import WallexClient
+
 COLS = ["open", "high", "low", "close", "volume", "taker_buy"]
-PAGE = 1000
+RESOLUTION = {"15m": 15, "1h": 60, "4h": 240}          # minutes per candle
+CHUNK = 500                                            # candles per Wallex history request
 
 
 class MarketDataError(RuntimeError):
     pass
+
+
+def _seconds(timeframe: str) -> int:
+    if timeframe not in RESOLUTION:
+        raise MarketDataError(f"unsupported timeframe {timeframe}; use one of {sorted(RESOLUTION)}")
+    return RESOLUTION[timeframe] * 60
+
+
+def wallex_candles(client: WallexClient, symbol: str, timeframe: str, bars: int) -> pd.DataFrame:
+    """Latest `bars` CLOSED candles from Wallex, fetched in chunks going back in time."""
+    step = _seconds(timeframe)
+    res = str(RESOLUTION[timeframe])
+    now = int(time.time())
+    end = now
+    rows: dict[int, tuple] = {}
+    for _ in range(max(1, bars // CHUNK + 2)):
+        frm = end - CHUNK * step
+        data = client.history(symbol, res, frm, end)
+        if data.get("s") == "ok":
+            for t, o, h, l, c, v in zip(data["t"], data["o"], data["h"], data["l"], data["c"], data["v"]):
+                rows[int(t)] = (float(o), float(h), float(l), float(c), float(v))
+        end = frm
+        if len(rows) >= bars:
+            break
+    if not rows:
+        raise MarketDataError(f"Wallex returned no candles for {symbol}")
+    ts = sorted(rows)
+    df = pd.DataFrame([rows[t] for t in ts], columns=["open", "high", "low", "close", "volume"],
+                      index=pd.to_datetime(ts, unit="s", utc=True))
+    df = df[df.index + pd.Timedelta(seconds=step) <= pd.Timestamp.now(tz="UTC")]   # drop forming candle
+    return df.tail(bars)
 
 
 def _get(urls: list[str], path: str, params: dict):
@@ -26,25 +60,12 @@ def _get(urls: list[str], path: str, params: dict):
     raise MarketDataError(f"all Binance hosts failed: {last_err}")
 
 
-def klines_to_frame(rows: list) -> pd.DataFrame:
-    """Binance kline row: [openTime, open, high, low, close, volume, closeTime, quoteVol, trades,
-    takerBuyBaseVol, takerBuyQuoteVol, ignore]."""
-    df = pd.DataFrame(rows)
-    out = pd.DataFrame({
-        "open": df[1].astype(float), "high": df[2].astype(float), "low": df[3].astype(float),
-        "close": df[4].astype(float), "volume": df[5].astype(float), "taker_buy": df[9].astype(float),
-        "close_time": df[6].astype("int64"),
-    })
-    out.index = pd.to_datetime(df[0].astype("int64"), unit="ms", utc=True)
-    return out
-
-
-def fetch_candles(symbol: str, interval: str, bars: int, urls: list[str]) -> pd.DataFrame:
-    """Latest `bars` candles, paginated backwards. Only CLOSED candles are returned."""
-    rows: list = []
-    end_time = None
+def binance_candles(symbol: str, timeframe: str, bars: int, urls: list[str]) -> pd.DataFrame:
+    """Public Binance klines (used only when data_provider='binance')."""
+    interval = {"15m": "15m", "1h": "1h", "4h": "4h"}[timeframe]
+    rows, end_time = [], None
     while len(rows) < bars:
-        params = {"symbol": symbol, "interval": interval, "limit": PAGE}
+        params = {"symbol": symbol, "interval": interval, "limit": 1000}
         if end_time is not None:
             params["endTime"] = end_time
         batch = _get(urls, "/api/v3/klines", params)
@@ -52,23 +73,31 @@ def fetch_candles(symbol: str, interval: str, bars: int, urls: list[str]) -> pd.
             break
         rows = batch + rows
         end_time = batch[0][0] - 1
-        if len(batch) < PAGE:
+        if len(batch) < 1000:
             break
     if not rows:
         raise MarketDataError(f"no candles for {symbol}")
-    df = klines_to_frame(rows)
-    df = df[~df.index.duplicated(keep="last")].sort_index()
+    df = pd.DataFrame({
+        "open": [float(r[1]) for r in rows], "high": [float(r[2]) for r in rows],
+        "low": [float(r[3]) for r in rows], "close": [float(r[4]) for r in rows],
+        "volume": [float(r[5]) for r in rows], "taker_buy": [float(r[9]) for r in rows],
+    }, index=pd.to_datetime([r[0] for r in rows], unit="ms", utc=True))
     now_ms = int(time.time() * 1000)
-    df = df[df["close_time"] < now_ms]          # drop the candle that is still forming
-    return df.drop(columns=["close_time"]).tail(bars)
+    closed = [r[6] < now_ms for r in rows]                 # close_time already passed = closed candle
+    df = df[closed]
+    df = df[~df.index.duplicated(keep="last")].sort_index()
+    return df.tail(bars)
 
 
-def fetch_price(symbol: str, urls: list[str]) -> float:
-    data = _get(urls, "/api/v3/ticker/price", {"symbol": symbol})
-    return float(data["price"])
+def fetch_candles(cfg, client: WallexClient | None, symbol: str, bars: int) -> pd.DataFrame:
+    if cfg.data_provider == "binance":
+        return binance_candles(symbol, cfg.timeframe, bars, cfg.binance_urls)
+    if client is None:
+        client = WallexClient()
+    return wallex_candles(client, symbol, cfg.timeframe, bars)
 
 
 def demo_frame(symbol: str, bars: int, seed: int) -> pd.DataFrame:
-    """Offline synthetic candles for testing the program without internet. NOT real prices."""
+    """Offline synthetic candles for testing without internet. NOT real prices."""
     from .synthetic import synthetic_ohlcv
     return synthetic_ohlcv(n_bars=bars, seed=seed, start_price=100.0 + seed * 10)

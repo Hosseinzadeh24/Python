@@ -1,17 +1,22 @@
-"""Crypto advisor: analyses the market and suggests BUY / SELL actions and investment opportunities.
+"""Crypto advisor for Wallex (Windows 11 / VS Code).
 
 Usage (from this folder):
-    python main.py              run once now
-    python main.py --loop       run every 15 minutes until you press Ctrl+C
-    python main.py --backtest   walk-forward test on real history (writes charts)
-    python main.py --demo       run offline with synthetic data (to check the installation)
+    python main.py --gui          window: API key box, max-loss / min-profit %, modes, kill switch
+    python main.py                analysis once and print suggestions (no orders)
+    python main.py --loop         analysis every 15 minutes (no orders)
+    python main.py --trade        headless trading bot (mode from config.json)
+    python main.py --kill         emergency: cancel this app's open orders and stop new buys (never sells)
+    python main.py --backtest     walk-forward test on real history (writes charts)
+    python main.py --demo         offline synthetic data (testing only, not real prices)
 
-It never places orders. You decide and trade yourself.
+Modes: suggest (no orders) | dry_run (simulated orders on real prices) | live (real orders).
+The API key is read from the environment variable WALLEX_API_KEY or from Windows Credential Manager.
 """
 from __future__ import annotations
 
 import argparse
 import json
+import os
 import sys
 import time
 import traceback
@@ -22,9 +27,13 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from advisor.config import Config  # noqa: E402
-from advisor.market import MarketDataError, demo_frame, fetch_candles, fetch_price  # noqa: E402
+from advisor.market import demo_frame, fetch_candles  # noqa: E402
 from advisor.notify import Notifier, format_alert  # noqa: E402
 from advisor.strategy import advise, default_params, limits_from, load_holdings, load_params  # noqa: E402
+from advisor.wallex import WallexClient, parse_snapshot  # noqa: E402
+
+LIVE_ENV = "WALLEX_LIVE_CONFIRM"
+LIVE_TOKEN = "I_ACCEPT_RISK"
 
 try:
     sys.stdout.reconfigure(errors="replace")
@@ -33,6 +42,7 @@ except Exception:
 
 
 def run_once(cfg: Config, demo: bool = False) -> list:
+    """Analysis and suggestions only. Never places orders."""
     now = datetime.now().astimezone()
     limits = limits_from(cfg)
     holdings = load_holdings(ROOT / "portfolio.json")
@@ -40,6 +50,14 @@ def run_once(cfg: Config, demo: bool = False) -> list:
     params = load_params(cfg)
     symbols = list(dict.fromkeys(cfg.symbols + [h.symbol for h in holdings]))
     notifier = Notifier(cfg)
+    client = WallexClient()
+
+    snap = {}
+    if not demo:
+        try:
+            snap = parse_snapshot(client.markets())
+        except Exception as exc:
+            print(f"Wallex prices not available: {exc}", flush=True)
 
     frames, prices, errors = {}, {}, {}
     for i, s in enumerate(symbols):
@@ -48,9 +66,9 @@ def run_once(cfg: Config, demo: bool = False) -> list:
                 frames[s] = demo_frame(s, cfg.train_bars + 100, seed=cfg.seed + i)
                 prices[s] = float(frames[s]["close"].iloc[-1])
             else:
-                frames[s] = fetch_candles(s, cfg.timeframe, cfg.train_bars, cfg.binance_urls)
-                prices[s] = fetch_price(s, cfg.binance_urls)
-        except (MarketDataError, Exception) as exc:           # one coin failing must not stop the rest
+                frames[s] = fetch_candles(cfg, client, s, cfg.train_bars + 100)
+                prices[s] = snap[s]["last"] if s in snap and snap[s]["last"] else float(frames[s]["close"].iloc[-1])
+        except Exception as exc:                      # one coin failing must not stop the rest
             errors[s] = str(exc)[:200]
 
     held_value = sum(h.qty * prices[h.symbol] for h in holdings if h.symbol in prices)
@@ -63,12 +81,13 @@ def run_once(cfg: Config, demo: bool = False) -> list:
         prm = params.get(s, default_params(cfg))
         adv = advise(s, frames[s], prices[s], prm, cfg, limits, held.get(s), exposure_left)
         if adv.action == "BUY":
-            exposure_left -= adv.amount_quote                  # later coins get the remaining budget
+            exposure_left -= adv.amount_quote
         advices.append(adv)
 
     lines = [f"Crypto advisor run: {now:%Y-%m-%d %H:%M:%S %Z}   capital {cfg.capital:.0f} USDT   "
-             f"held value {held_value:.2f} USDT", ""]
-    pending_alerts = []          # (text, record, important) - printed after the summary table
+             f"held value {held_value:.2f} USDT   max loss {cfg.max_loss_pct:g}%   min profit {cfg.min_profit_pct:g}%",
+             ""]
+    pending_alerts = []
     for adv in advices:
         for kind in adv.alerts:
             if notifier.should_alert(adv.symbol, kind, now):
@@ -85,8 +104,7 @@ def run_once(cfg: Config, demo: bool = False) -> list:
                      f"edge {adv.net_edge:+6.2%}  RSI {adv.rsi:4.0f}  trend {adv.trend:<4} buy-pressure {pos}")
         if adv.action in ("BUY", "SELL"):
             lines.append(f"          -> {adv.action} {adv.qty:.6g} {adv.symbol[:-4]} (~{adv.amount_quote:.2f} USDT)"
-                         + (f"  stop {adv.stop_price:.6g}  target {adv.take_price:.6g}"
-                            if adv.action == "BUY" else f"  (stop {adv.stop_price:.6g}, target {adv.take_price:.6g})"))
+                         f"  stop {adv.stop_price:.6g}  target {adv.take_price:.6g}")
         if adv.suggested_stop:
             lines.append(f"          -> consider moving stop to {adv.suggested_stop:.6g}")
         lines.append(f"          {adv.reason}")
@@ -106,23 +124,83 @@ def run_once(cfg: Config, demo: bool = False) -> list:
 def next_quarter_hour(now: datetime) -> datetime:
     base = now.replace(minute=0, second=0, microsecond=0)
     nxt = base + timedelta(minutes=(now.minute // 15 + 1) * 15)
-    return nxt + timedelta(seconds=20)                       # small delay: let the exchange finish the candle
+    return nxt + timedelta(seconds=20)                 # small delay: let the exchange finish the candle
+
+
+def _log_error(cfg: Config, msg: str) -> None:
+    err_log = cfg.out / "errors.log"
+    err_log.parent.mkdir(parents=True, exist_ok=True)
+    with err_log.open("a", encoding="utf-8") as f:
+        f.write(f"{datetime.now().isoformat()}\n{msg}\n")
 
 
 def loop(cfg: Config, demo: bool) -> None:
-    err_log = cfg.out / "errors.log"
+    """Suggestion loop every 15 minutes (no orders)."""
     while True:
         try:
             run_once(cfg, demo)
-        except Exception:                                    # keep running through unexpected errors
+        except Exception:                              # keep running through unexpected errors
             msg = traceback.format_exc()
             print(msg, flush=True)
-            err_log.parent.mkdir(parents=True, exist_ok=True)
-            with err_log.open("a", encoding="utf-8") as f:
-                f.write(f"{datetime.now().isoformat()}\n{msg}\n")
+            _log_error(cfg, msg)
         nxt = next_quarter_hour(datetime.now().astimezone())
         print(f"\nNext run at {nxt:%H:%M:%S}. Press Ctrl+C to stop.\n", flush=True)
         time.sleep(max(1.0, (nxt - datetime.now().astimezone()).total_seconds()))
+
+
+def trade_loop(cfg: Config) -> None:
+    """Headless trading: price checks every tick_seconds, analysis every cycle_minutes."""
+    from advisor.bot import Bot
+    from advisor.secrets_store import load_key
+
+    if cfg.trading_mode == "live":
+        if os.environ.get(LIVE_ENV) != LIVE_TOKEN:
+            raise SystemExit(f"Live trading is off. To enable it set {LIVE_ENV}={LIVE_TOKEN} for this session.")
+    bot = Bot(cfg, api_key=load_key() if cfg.trading_mode != "suggest" else None)
+    print(f"Mode: {cfg.trading_mode}. Max loss {cfg.max_loss_pct:g}%, min profit {cfg.min_profit_pct:g}%."
+          f" Press Ctrl+C to stop.", flush=True)
+    last_cycle = 0.0
+    while True:
+        try:
+            for ev in bot.tick():
+                print(f"{datetime.now():%H:%M:%S} {ev}", flush=True)
+            if time.time() - last_cycle >= cfg.cycle_minutes * 60:
+                for ev in bot.analyse():
+                    print(f"{datetime.now():%H:%M:%S} {ev}", flush=True)
+                last_cycle = time.time()
+        except Exception:
+            msg = traceback.format_exc()
+            print(msg, flush=True)
+            _log_error(cfg, msg)
+        time.sleep(cfg.tick_seconds)
+
+
+def kill_now(cfg: Config) -> None:
+    """Command-line emergency stop: cancel this app's open orders and stop new buys.
+    It never sells. Selling everything is done from the window (kill switch + 'also sell all positions')."""
+    from advisor.bot import PREFIX_ORDERS, write_kill_flag
+    from advisor.secrets_store import load_key
+    from advisor.wallex import WallexClient
+
+    key = load_key()
+    if not key:
+        raise SystemExit("No API key found (set WALLEX_API_KEY or save the key in the window).")
+    client = WallexClient(key)
+    try:
+        cancelled = 0
+        for o in client.open_orders():
+            cid = str(o.get("clientOrderId", ""))
+            if cid.startswith(PREFIX_ORDERS):
+                client.cancel(cid)
+                cancelled += 1
+                print(f"cancelled {cid} ({o.get('symbol', '')})", flush=True)
+    except Exception as exc:
+        print(f"Could not reach Wallex: {exc}\nCheck your open orders on wallex.ir.", flush=True)
+        return
+    write_kill_flag(cfg.out, "command line kill switch")
+    print(f"Done: {cancelled} order(s) cancelled. New buys are stopped. Stop-loss and take-profit stay active "
+          "in the window. To sell positions, use the window's kill switch with 'also sell all positions'.",
+          flush=True)
 
 
 def backtest(cfg: Config) -> None:
@@ -130,8 +208,9 @@ def backtest(cfg: Config) -> None:
 
     weeks = cfg.calibration_periods
     bars = cfg.train_bars + weeks * cfg.test_bars + 100
-    print(f"Downloading {bars} hourly candles per coin ...", flush=True)
-    frames = {s: fetch_candles(s, cfg.timeframe, bars, cfg.binance_urls) for s in cfg.symbols}
+    print(f"Downloading {bars} hourly candles per coin from {cfg.data_provider} ...", flush=True)
+    client = WallexClient()
+    frames = {s: fetch_candles(cfg, client, s, bars) for s in cfg.symbols}
     result = walk_forward(frames, cfg, periods=weeks)
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out = save_results(result, cfg.out / "backtest" / f"run_{stamp}")
@@ -143,15 +222,25 @@ def backtest(cfg: Config) -> None:
 
 
 def main(argv=None) -> None:
-    ap = argparse.ArgumentParser(description="Crypto advisor (suggestions only)")
-    ap.add_argument("--loop", action="store_true", help="run every 15 minutes")
+    ap = argparse.ArgumentParser(description="Crypto advisor for Wallex")
+    ap.add_argument("--gui", action="store_true", help="open the window")
+    ap.add_argument("--loop", action="store_true", help="suggestions every 15 minutes (no orders)")
+    ap.add_argument("--trade", action="store_true", help="headless trading bot (mode from config.json)")
+    ap.add_argument("--kill", action="store_true", help="cancel this app's open orders and stop new buys")
     ap.add_argument("--backtest", action="store_true", help="walk-forward backtest with charts")
     ap.add_argument("--demo", action="store_true", help="offline synthetic data (testing only)")
     ap.add_argument("--config", default=None, help="path to config.json")
     args = ap.parse_args(argv)
     cfg = Config.load(args.config)
     try:
-        if args.backtest:
+        if args.gui:
+            from advisor.gui import run_gui
+            run_gui(cfg)
+        elif args.trade:
+            trade_loop(cfg)
+        elif args.kill:
+            kill_now(cfg)
+        elif args.backtest:
             backtest(cfg)
         elif args.loop:
             loop(cfg, args.demo)

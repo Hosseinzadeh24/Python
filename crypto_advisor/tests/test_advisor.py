@@ -76,7 +76,7 @@ def test_forming_candle_is_dropped(monkeypatch):
         rows.append([open_ms, 100, 101, 99, 100.5, 10, close_ms, 1000, 5, 6, 600, 0])
     rows[-1][6] = now_ms + hour                               # last candle still forming
     monkeypatch.setattr(market, "_get", lambda urls, path, params: rows)
-    df = market.fetch_candles("BTCUSDT", "1h", 10, ["x"])
+    df = market.binance_candles("BTCUSDT", "1h", 10, ["x"])
     assert len(df) == 4
     assert {"open", "high", "low", "close", "volume", "taker_buy"} <= set(df.columns)
     assert df["taker_buy"].iloc[0] == 6
